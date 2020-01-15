@@ -1,0 +1,14 @@
+name: ndpa2tiff
+channels:
+- defaults
+dependencies:
+- python=3.7
+- pip=10.0.1
+- setuptools
+- pip:
+  - numpy
+  - pillow
+  - tqdm
+  - openslide-python
+  - opencv-python
+  - piexif

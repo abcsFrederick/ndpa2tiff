@@ -14,12 +14,13 @@ import cv2
 import os
 import argparse
 import warnings
+from albumentations import Resize
 
-# TEST_NDPI_PATH = 'test/2018-04-19 12.42.14.ndpi'
-# TEST_NDPA_PATH = 'test/2018-04-19 12.42.14.ndpi.ndpa'
-# TEST_TIFF_PATH = 'test/2018-04-19 12.42.14.tiff'
+# NDPI_PATH = 'input/PARPEI-OBMIHX_C-Q70.svs'
+# NDPA_PATH = 'input/PARPEI-OBMIHX_C-Q70.svs.ndpa'
+# TIFF_PATH = 'result/PARPEI-OBMIHX_C-Q70-NoOffset.tiff'
 
-class Ndpa2coor:
+class hamamatsuNdpa2coor:
     def __init__(self, x_off, y_off, x_mpp, y_mpp, dimX0, dimY0):
        	self.x_off = x_off
        	self.y_off = y_off
@@ -36,29 +37,57 @@ class Ndpa2coor:
 
         x = x + self.dimX0 / 2  # in pixels, relative to UL corner
         y = y + self.dimY0 / 2
+
         return int(x), int(y)
-def main(NDPI_PATH, NDPA_PATH, TIFF_PATH):
+
+class aperioNdpa2coor:
+    def __init__(self, x_off, y_off, x_mpp, y_mpp, dimX0, dimY0):
+       	self.x_off = x_off
+       	self.y_off = y_off
+       	self.x_mpp = x_mpp
+       	self.y_mpp = y_mpp
+        self.dimX0 = dimX0
+        self.dimY0 = dimY0
+    def convert(self, x, y):
+
+        # x -= 1000000*float(self.x_off) # Until we find defination of LineAreaXOffset
+        # y -= 1000000*float(self.y_off)
+
+        x /= (1000*self.x_mpp)  # in pixels, relative to the center
+        y /= (1000*self.y_mpp)
+
+        return int(x), int(y)
+def main(FILE_PATH, NDPA_PATH, TIFF_PATH, TIFF_PATH_10X, format):
 
     xml_file = ET.parse(NDPA_PATH)
 
     xml_root = xml_file.getroot()
 
-    ndpi = osl.OpenSlide(NDPI_PATH)
+    _osl = osl.OpenSlide(FILE_PATH)
 
-    x_off = ndpi.properties['hamamatsu.XOffsetFromSlideCentre']
-    y_off = ndpi.properties['hamamatsu.YOffsetFromSlideCentre']
-    x_mpp = float(ndpi.properties['openslide.mpp-x'])
-    y_mpp = float(ndpi.properties['openslide.mpp-y'])
-    dimX0, dimY0 = ndpi.level_dimensions[0]
-    # print("x_off =", x_off, "   y_off =", y_off)
-    # print("x_mpp =", x_mpp, "   x_mpp =", y_mpp)
-    # print("dimX0 =", dimX0, "   dimY0 =", dimY0)
-    coor = Ndpa2coor(x_off, y_off, x_mpp, y_mpp, dimX0, dimY0)
+    if format == 'aperio':
+        # print(_osl.properties)
+        x_off = _osl.properties['aperio.LineAreaXOffset']
+        y_off = _osl.properties['aperio.LineAreaYOffset']
+        x_mpp = float(_osl.properties['openslide.mpp-x'])
+        y_mpp = float(_osl.properties['openslide.mpp-y'])
+        dimX0, dimY0 = _osl.level_dimensions[0]
+        # print("x_off =", x_off, "   y_off =", y_off)
+        # print("x_mpp =", x_mpp, "   x_mpp =", y_mpp)
+        # print("dimX0 =", dimX0, "   dimY0 =", dimY0)
 
+        coor = aperioNdpa2coor(x_off, y_off, x_mpp, y_mpp, dimX0, dimY0)
+    elif format == 'hamamatsu':
+        x_off = _osl.properties['hamamatsu.XOffsetFromSlideCentre']
+        y_off = _osl.properties['hamamatsu.YOffsetFromSlideCentre']
+        x_mpp = float(_osl.properties['openslide.mpp-x'])
+        y_mpp = float(_osl.properties['openslide.mpp-y'])
+        dimX0, dimY0 = _osl.level_dimensions[0]
+        coor = hamamatsuNdpa2coor(x_off, y_off, x_mpp, y_mpp, dimX0, dimY0)
+    print('[INFO] Creating 40x....')
     mat = np.zeros((dimY0, dimX0), dtype='uint8')
     for ann in list(xml_root):
         points = []
-
         p = ann.find('annotation')
         if p is None:
             continue
@@ -115,8 +144,30 @@ def main(NDPI_PATH, NDPA_PATH, TIFF_PATH):
                 points.append((x, y))
 
         cnt = np.array(points).reshape((-1, 1, 2)).astype(np.int32)
-        cv2.fillPoly(mat, [cnt], 255)
+        if ann.find('title').text is None:
+            cv2.fillPoly(mat, [cnt], 255)
+        elif ann.find('title').text == 'ARMS':
+            cv2.fillPoly(mat, [cnt], 250)
+        elif ann.find('title').text == 'ERMS':
+            cv2.fillPoly(mat, [cnt], 200)
+        elif ann.find('title').text == 'STROMA':
+            cv2.fillPoly(mat, [cnt], 150)
+        elif ann.find('title').text == 'NECROSIS':
+            cv2.fillPoly(mat, [cnt], 100)
     cv2.imwrite(TIFF_PATH, mat[:,:])
+    print('[INFO] Creating 10x....')
+
+    org_height = mat.shape[0]
+    org_width = mat.shape[1]
+
+
+    res_height = org_height//4
+    res_width = org_width//4
+
+    aug_inf = Resize(p=1.0, height = res_height, width = res_width)
+    augmented_inf = aug_inf(image= mat, mask= mat)
+    resized = augmented_inf['mask']
+    cv2.imwrite(TIFF_PATH_10X, resized)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="""
@@ -134,12 +185,19 @@ if __name__ == '__main__':
             warnings.warn('%s does not has ndpi' % ndpafilename)
             continue
         print('%s is been processing.' % ndpafilename)
-        ndpifilename = basename[0]
-        tifffilename = basename[0].replace(".ndpi", ".tiff")
-
-        NDPI_PATH = os.path.join(args.input, ndpifilename)
+        if basename[0].endswith(".ndpi"):
+            filename = basename[0]
+            tifffilename = basename[0].replace(".ndpi", ".tiff")
+            tifffilename_10x = basename[0].replace(".ndpi", "_10x.tiff")
+            format = 'hamamatsu'
+        elif basename[0].endswith(".svs"):
+            filename = basename[0]
+            tifffilename = basename[0].replace(".svs", ".tiff")
+            tifffilename_10x = basename[0].replace(".svs", "_10x.tiff")
+            format = 'aperio'
+        FILE_PATH = os.path.join(args.input, filename)
         NDPA_PATH = os.path.join(args.input, ndpafilename)
         TIFF_PATH = os.path.join(args.output, tifffilename)
-
-    main(NDPI_PATH, NDPA_PATH, TIFF_PATH)
+        TIFF_PATH_10X = os.path.join(args.output, tifffilename_10x)
+        main(FILE_PATH, NDPA_PATH, TIFF_PATH, TIFF_PATH_10X, format)
 

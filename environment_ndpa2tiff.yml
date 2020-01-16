@@ -12,3 +12,4 @@ dependencies:
   - openslide-python
   - opencv-python
   - piexif
+  - albumentations

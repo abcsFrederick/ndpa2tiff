@@ -50,6 +50,7 @@ class aperioNdpa2coor:
         self.dimY0 = dimY0
     def convert(self, x, y):
 
+        # Should not use LineAreaXOffset
         # x -= 1000000*float(self.x_off) # Until we find defination of LineAreaXOffset
         # y -= 1000000*float(self.y_off)
 
